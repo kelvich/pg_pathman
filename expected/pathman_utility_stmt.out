@@ -158,7 +158,7 @@ SELECT * FROM copy_stmt_hooking.test WHERE val > 20;
 
 /* COPY FROM (partitioned column is not specified) */
 COPY copy_stmt_hooking.test(comment) FROM stdin;
-ERROR:  partitioning expression's value should not be NULL
+ERROR:  null value in column "val" violates not-null constraint
 /* COPY FROM (we don't support FREEZE) */
 COPY copy_stmt_hooking.test FROM stdin WITH (FREEZE);
 ERROR:  freeze is not supported for partitioned tables
