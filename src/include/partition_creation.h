@@ -44,6 +44,10 @@ Oid create_single_hash_partition_internal(Oid parent_relid,
 										  char *tablespace);
 
 
+/* Create one NULLs partition */
+Oid create_single_null_partition(Oid parent_relid,
+								 RangeVar *partition_rv);
+
 /* RANGE constraints */
 Constraint * build_range_check_constraint(Oid child_relid,
 										  Node *raw_expression,
@@ -64,17 +68,19 @@ bool check_range_available(Oid parent_relid,
 
 
 /* HASH constraints */
-Constraint * build_hash_check_constraint(Oid child_relid,
+Constraint *build_hash_check_constraint(Oid child_relid,
 										 Node *raw_expression,
 										 uint32 part_idx,
 										 uint32 part_count,
 										 Oid value_type);
 
-Node * build_raw_hash_check_tree(Node *raw_expression,
+Node *build_raw_hash_check_tree(Node *raw_expression,
 								 uint32 part_idx,
 								 uint32 part_count,
 								 Oid relid,
 								 Oid value_type);
+
+Constraint *build_null_check_constraint(Oid child_relid, Node *raw_expression);
 
 void drop_check_constraint(Oid relid);
 

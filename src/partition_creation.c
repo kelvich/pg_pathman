@@ -67,6 +67,7 @@ static Oid create_single_partition_internal(Oid parent_relid,
 
 static char *choose_range_partition_name(Oid parent_relid, Oid parent_nsp);
 static char *choose_hash_partition_name(Oid parent_relid, uint32 part_idx);
+static char *choose_null_partition_name(Oid parent_relid);
 
 static ObjectAddress create_table_using_stmt(CreateStmt *create_stmt,
 											 Oid relowner);
@@ -176,7 +177,7 @@ create_single_hash_partition_internal(Oid parent_relid,
 		partition_rv = makeRangeVar(parent_nsp_name, partition_name, -1);
 	}
 
-	/* Create a partition & get 'partitionining expression' */
+	/* Create a partition */
 	partition_relid = create_single_partition_internal(parent_relid,
 													   partition_rv,
 													   tablespace);
@@ -190,6 +191,55 @@ create_single_hash_partition_internal(Oid parent_relid,
 											   part_idx,
 											   part_count,
 											   expr_type);
+
+	/* Cook args for init_callback */
+	MakeInitCallbackHashParams(&callback_params,
+							   DEFAULT_INIT_CALLBACK,
+							   parent_relid, partition_relid);
+
+	/* Add constraint & execute init_callback */
+	create_single_partition_common(parent_relid,
+								   partition_relid,
+								   check_constr,
+								   &callback_params,
+								   trigger_columns);
+
+	/* Return the Oid */
+	return partition_relid;
+}
+
+/* Create single NULLs partition */
+Oid
+create_single_null_partition(Oid parent_relid,
+							 RangeVar *partition_rv)
+{
+	Oid						partition_relid;
+	Constraint			   *check_constr;
+	init_callback_params	callback_params;
+	List				   *trigger_columns = NIL;
+	Node				   *expr;
+
+	/* Generate a name if asked to */
+	if (!partition_rv)
+	{
+		Oid		parent_nsp = get_rel_namespace(parent_relid);
+		char   *parent_nsp_name = get_namespace_name(parent_nsp);
+		char   *partition_name;
+
+		partition_name = choose_null_partition_name(parent_relid);
+		partition_rv = makeRangeVar(parent_nsp_name, partition_name, -1);
+	}
+
+	/* Create a partition */
+	partition_relid = create_single_partition_internal(parent_relid,
+													   partition_rv,
+													   NULL);
+
+	/* check pathman config and fill variables */
+	expr = build_partitioning_expression(parent_relid, NULL, &trigger_columns);
+
+	/* Build check constraint for NULLs partition */
+	check_constr = build_null_check_constraint(partition_relid, expr);
 
 	/* Cook args for init_callback */
 	MakeInitCallbackHashParams(&callback_params,
@@ -401,7 +451,7 @@ create_partitions_for_value_internal(Oid relid, Datum value, Oid value_type,
 									  prel->ev_byval,
 									  prel->ev_len);
 
-				bound_max = CopyBound(&ranges[PrelLastChild(prel)].max,
+				bound_max = CopyBound(&ranges[PrelLastRangePartition(prel)].max,
 									  prel->ev_byval,
 									  prel->ev_len);
 
@@ -666,6 +716,13 @@ static char *
 choose_hash_partition_name(Oid parent_relid, uint32 part_idx)
 {
 	return psprintf("%s_%u", get_rel_name(parent_relid), part_idx);
+}
+
+/* Choose a good name for a NULL partition */
+static char *
+choose_null_partition_name(Oid parent_relid)
+{
+	return psprintf("%s_null", get_rel_name(parent_relid));
 }
 
 /* Create a partition-like table (no constraints yet) */
@@ -1383,6 +1440,31 @@ build_hash_check_constraint(Oid child_relid,
 																   value_type));
 	/* Everything seems to be fine */
 	return hash_constr;
+}
+
+/* Build complete check constraint for IS NULL */
+Constraint *
+build_null_check_constraint(Oid child_relid,
+							Node *raw_expression)
+{
+	Constraint	   *constr;
+	char		   *constr_name;
+	NullTest	   *null_test = makeNode(NullTest);
+
+	/* build check tree for constraint */
+	null_test->arg = (Expr *) raw_expression;
+	null_test->nulltesttype = IS_NULL;
+	null_test->argisrow = false;
+	null_test->location = -1;
+
+	/* Build a correct name for this constraint */
+	constr_name = build_check_constraint_name_relid_internal(child_relid);
+
+	/* Initialize basic properties of a CHECK constraint */
+	constr = make_constraint_common(constr_name, (Node *) null_test);
+
+	/* Everything seems to be fine */
+	return constr;
 }
 
 static Constraint *

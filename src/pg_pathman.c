@@ -734,8 +734,17 @@ handle_const(const Const *c,
 	 */
 	if (c->constisnull)
 	{
-		result->rangeset = NIL;
-		result->paramsel = 0.0;
+		if (prel->has_null_partition)
+		{
+			uint32 idx = PrelLastChild(prel);
+			result->rangeset = list_make1_irange(make_irange(idx, idx, IR_LOSSY));
+			result->paramsel = estimate_paramsel_using_prel(prel, strategy);
+		}
+		else
+		{
+			result->rangeset = NIL;
+			result->paramsel = 0.0;
+		}
 
 		return; /* done, exit */
 	}
@@ -793,7 +802,7 @@ handle_const(const Const *c,
 				/* Calculate 32-bit hash of 'value' and corresponding index */
 				hash = OidFunctionCall1(prel->hash_proc, value);
 				idx = hash_to_part_index(DatumGetInt32(hash),
-										 PrelChildrenCount(prel));
+										 PrelHashPartitionsCount(prel));
 
 				result->rangeset = list_make1_irange(make_irange(idx, idx, IR_LOSSY));
 				result->paramsel = estimate_paramsel_using_prel(prel, strategy);
@@ -820,7 +829,7 @@ handle_const(const Const *c,
 										c->constcollid,
 										&cmp_finfo,
 										PrelGetRangesArray(context->prel),
-										PrelChildrenCount(context->prel),
+										PrelRangePartitionsCount(context->prel),
 										strategy,
 										result); /* output */
 

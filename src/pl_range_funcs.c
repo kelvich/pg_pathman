@@ -414,7 +414,7 @@ get_part_range_by_oid(PG_FUNCTION_ARGS)
 	ranges = PrelGetRangesArray(prel);
 
 	/* Look for the specified partition */
-	for (i = 0; i < PrelChildrenCount(prel); i++)
+	for (i = 0; i < PrelRangePartitionsCount(prel); i++)
 		if (ranges[i].child_oid == partition_relid)
 		{
 			ArrayType  *arr;
@@ -488,13 +488,13 @@ get_part_range_by_idx(PG_FUNCTION_ARGS)
 	}
 	else if (partition_idx == -1)
 	{
-		partition_idx = PrelLastChild(prel);
+		partition_idx = PrelHashPartitionsCount(prel) - 1;
 	}
-	else if (((uint32) abs(partition_idx)) >= PrelChildrenCount(prel))
+	else if (((uint32) abs(partition_idx)) >= PrelHashPartitionsCount(prel))
 	{
 		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("partition #%d does not exist (total amount is %u)",
-							   partition_idx, PrelChildrenCount(prel))));
+							   partition_idx, PrelHashPartitionsCount(prel))));
 	}
 
 	ranges = PrelGetRangesArray(prel);

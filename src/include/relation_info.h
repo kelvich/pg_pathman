@@ -115,7 +115,8 @@ typedef enum
 {
 	PT_ANY = 0, /* for part type traits (virtual type) */
 	PT_HASH,
-	PT_RANGE
+	PT_RANGE,
+	PT_NULL /* for null partition */
 } PartType;
 
 /*
@@ -143,8 +144,9 @@ typedef struct
 
 	/* Partition dispatch info */
 	uint32			children_count;
-	Oid			   *children;		/* Oids of child partitions */
-	RangeEntry	   *ranges;			/* per-partition range entry or NULL */
+	Oid			   *children;					/* Oids of child partitions */
+	RangeEntry	   *ranges;						/* per-partition range entry or NULL */
+	bool			has_null_partition;		/* is nulls partition was created? */
 
 	/* Partitioning expression */
 	const char	   *expr_cstr;		/* original expression */
@@ -224,6 +226,12 @@ typedef enum
 
 #define PrelChildrenCount(prel)		( (prel)->children_count )
 
+#define PrelHashPartitionsCount(prel) \
+	( PrelChildrenCount(prel) - ((prel)->has_null_partition? 1 : 0))
+
+#define PrelRangePartitionsCount(prel) \
+	( PrelChildrenCount(prel) - ((prel)->has_null_partition? 1 : 0))
+
 #define PrelIsValid(prel)			( (prel) && (prel)->valid )
 
 static inline uint32
@@ -236,6 +244,27 @@ PrelLastChild(const PartRelationInfo *prel)
 			 PrelParentRelid(prel));
 
 	return PrelChildrenCount(prel) - 1; /* last partition */
+}
+
+static inline uint32
+PrelLastRangePartition(const PartRelationInfo *prel)
+{
+	Assert(PrelIsValid(prel));
+
+	if (PrelChildrenCount(prel) == 0)
+		elog(ERROR, "pg_pathman's cache entry for relation %u has 0 children",
+			 PrelParentRelid(prel));
+
+	return PrelRangePartitionsCount(prel) - 1;
+}
+
+static inline uint32
+PrelNullPartition(const PartRelationInfo *prel)
+{
+	Assert(PrelIsValid(prel));
+	Assert(prel->has_null_partition);
+
+	return PrelLastChild(prel) - 1; /* last partition */
 }
 
 static inline List *
@@ -305,8 +334,6 @@ Oid get_parent_of_partition(Oid partition, PartParentSearch *status);
 
 /* Bounds cache */
 void forget_bounds_of_partition(Oid partition);
-PartBoundInfo *get_bounds_of_partition(Oid partition,
-									   const PartRelationInfo *prel);
 
 /* PartType wrappers */
 

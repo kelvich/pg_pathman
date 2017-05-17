@@ -406,6 +406,7 @@ find_partitions_for_value(Datum value, Oid value_type,
 	ranges = walk_expr_tree((Expr *) &temp_const, &wcxt)->rangeset;
 
 	return get_partition_oids(ranges, nparts, prel, false);
+#undef CopyToTempConst
 }
 
 /*
@@ -415,32 +416,52 @@ ResultRelInfoHolder *
 select_partition_for_insert(Datum value, Oid value_type,
 							const PartRelationInfo *prel,
 							ResultPartsStorage *parts_storage,
-							EState *estate)
+							EState *estate,
+							bool is_null)
 {
 	MemoryContext			old_mcxt;
 	ResultRelInfoHolder	   *rri_holder;
-	Oid						selected_partid = InvalidOid;
-	Oid					   *parts;
-	int						nparts;
+	Oid						partition_relid = InvalidOid;
+	bool					invalidate_prel = false;
 
-	/* Search for matching partitions */
-	parts = find_partitions_for_value(value, value_type, prel, &nparts);
-
-	if (nparts > 1)
-		elog(ERROR, ERR_PART_ATTR_MULTIPLE);
-	else if (nparts == 0)
+	if (is_null)
 	{
-		 selected_partid = create_partitions_for_value(PrelParentRelid(prel),
-													   value, prel->ev_type);
-
-		 /* get_pathman_relation_info() will refresh this entry */
-		 invalidate_pathman_relation_info(PrelParentRelid(prel), NULL);
+		if (prel->has_null_partition)
+			partition_relid = PrelGetChildrenArray(prel)[PrelNullPartition(prel)];
+		else
+		{
+			partition_relid = create_single_null_partition(PrelParentRelid(prel), NULL);
+			invalidate_prel = true;
+		}
 	}
-	else selected_partid = parts[0];
+	else
+	{
+		int		 nparts;
+		Oid		*parts;
+
+		/* Search for matching partitions */
+		parts = find_partitions_for_value(value, value_type, prel, &nparts);
+
+		if (nparts > 1)
+			elog(ERROR, ERR_PART_ATTR_MULTIPLE);
+		else if (nparts == 0)
+		{
+			partition_relid = create_partitions_for_value(PrelParentRelid(prel),
+														   value, prel->ev_type);
+			invalidate_prel = true;
+		}
+		else partition_relid = parts[0];
+	}
+
+	if (invalidate_prel)
+	{
+		/* get_pathman_relation_info() will refresh this entry */
+		invalidate_pathman_relation_info(PrelParentRelid(prel), NULL);
+	}
 
 	/* Replace parent table with a suitable partition */
 	old_mcxt = MemoryContextSwitchTo(estate->es_query_cxt);
-	rri_holder = scan_result_parts_storage(selected_partid, parts_storage);
+	rri_holder = scan_result_parts_storage(partition_relid, parts_storage);
 	MemoryContextSwitchTo(old_mcxt);
 
 	/* Could not find suitable partition */
@@ -623,15 +644,13 @@ partition_filter_exec(CustomScanState *node)
 		value = ExecEvalExpr(state->expr_state, econtext, &isnull, &itemIsDone);
 		econtext->ecxt_scantuple = tmp_slot;
 
-		if (isnull)
-			elog(ERROR, ERR_PART_ATTR_NULL);
-
 		if (itemIsDone != ExprSingleResult)
 			elog(ERROR, ERR_PART_ATTR_MULTIPLE_RESULTS);
 
 		/* Search for a matching partition */
 		rri_holder = select_partition_for_insert(value, prel->ev_type, prel,
-												 &state->result_parts, estate);
+												 &state->result_parts, estate,
+												 isnull);
 
 		/* Switch back and clean up per-tuple context */
 		MemoryContextSwitchTo(old_mcxt);

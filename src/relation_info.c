@@ -100,6 +100,8 @@ static void fill_pbin_with_bounds(PartBoundInfo *pbin,
 
 static int cmp_range_entries(const void *p1, const void *p2, void *arg);
 
+static PartBoundInfo *get_bounds_of_partition(Oid partition,
+											  const PartRelationInfo *prel);
 
 void
 init_relation_info_static_data(void)
@@ -436,14 +438,6 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 						  const Oid *partitions,
 						  const uint32 parts_count)
 {
-/* Allocate array if partitioning type matches 'prel' (or "ANY") */
-#define AllocZeroArray(part_type, context, elem_num, elem_type) \
-	( \
-		((part_type) == PT_ANY || (part_type) == prel->parttype) ? \
-			MemoryContextAllocZero((context), (elem_num) * sizeof(elem_type)) : \
-			NULL \
-	)
-
 	uint32			i;
 	MemoryContext	cache_mcxt = PathmanRelationCacheContext,
 					temp_mcxt,	/* reference temporary mcxt */
@@ -452,8 +446,13 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 	AssertTemporaryContext();
 
 	/* Allocate memory for 'prel->children' & 'prel->ranges' (if needed) */
-	prel->children	= AllocZeroArray(PT_ANY,   cache_mcxt, parts_count, Oid);
-	prel->ranges	= AllocZeroArray(PT_RANGE, cache_mcxt, parts_count, RangeEntry);
+	prel->children	= MemoryContextAllocZero(cache_mcxt, parts_count * sizeof(Oid));
+	prel->ranges	= NULL;
+	prel->has_null_partition = false;
+
+	if (prel->parttype == PT_RANGE)
+		prel->ranges = MemoryContextAllocZero(cache_mcxt,
+											  parts_count * sizeof(RangeEntry));
 
 	/* Set number of children */
 	PrelChildrenCount(prel) = parts_count;
@@ -480,14 +479,22 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 		MemoryContextSwitchTo(old_mcxt);
 
 		/* Copy bounds from bound cache */
-		switch (prel->parttype)
+		switch (bound_info->parttype)
 		{
+			case PT_NULL:
+				/* last item in children will contain NULL partition */
+				prel->children[parts_count - 1] = bound_info->child_rel;
+				prel->has_null_partition = true;
+				break;
 			case PT_HASH:
+				Assert(bound_info->part_idx < PrelHashPartitionsCount(prel));
 				prel->children[bound_info->part_idx] = bound_info->child_rel;
 				break;
 
 			case PT_RANGE:
 				{
+					Assert(i < PrelRangePartitionsCount(prel));
+
 					/* Copy child's Oid */
 					prel->ranges[i].child_oid = bound_info->child_rel;
 
@@ -528,12 +535,12 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 		cmp_info.collid = prel->ev_collid;
 
 		/* Sort partitions by RangeEntry->min asc */
-		qsort_arg((void *) prel->ranges, PrelChildrenCount(prel),
+		qsort_arg((void *) prel->ranges, PrelRangePartitionsCount(prel),
 				  sizeof(RangeEntry), cmp_range_entries,
 				  (void *) &cmp_info);
 
 		/* Initialize 'prel->children' array */
-		for (i = 0; i < PrelChildrenCount(prel); i++)
+		for (i = 0; i < PrelRangePartitionsCount(prel); i++)
 			prel->children[i] = prel->ranges[i].child_oid;
 	}
 
@@ -600,7 +607,6 @@ cook_partitioning_expression(const Oid relid,
 	List				   *querytree_list;
 	TargetEntry			   *target_entry;
 
-	Node				   *raw_expr;
 	Query				   *expr_query;
 	PlannedStmt			   *expr_plan;
 	Node				   *expr;
@@ -619,36 +625,8 @@ cook_partitioning_expression(const Oid relid,
 									   ALLOCSET_DEFAULT_SIZES);
 
 	/* Keep raw expression */
-	raw_expr = parse_partitioning_expression(relid, expr_cstr,
-											 &query_string, &parsetree);
-
-	/* Check if raw_expr is NULLable */
-	if (IsA(raw_expr, ColumnRef))
-	{
-		ColumnRef *column = (ColumnRef *) raw_expr;
-
-		if (list_length(column->fields) == 1)
-		{
-			HeapTuple	htup;
-			bool		attnotnull;
-			char	   *attname = strVal(linitial(column->fields));
-
-			/* check if attribute is nullable */
-			htup = SearchSysCacheAttName(relid, attname);
-			if (HeapTupleIsValid(htup))
-			{
-				Form_pg_attribute att_tup = (Form_pg_attribute) GETSTRUCT(htup);
-				attnotnull = att_tup->attnotnull;
-				ReleaseSysCache(htup);
-			}
-			else elog(ERROR, "cannot find type name for attribute \"%s\" "
-							 "of relation \"%s\"",
-					  attname, get_rel_name_or_relid(relid));
-
-			if (!attnotnull)
-				elog(ERROR, "partitioning key \"%s\" must be marked NOT NULL", attname);
-		}
-	}
+	parse_partitioning_expression(relid, expr_cstr,
+									&query_string, &parsetree);
 
 	/* We don't need pathman activity initialization for this relation yet */
 	pathman_hooks_enabled = false;
@@ -1066,7 +1044,7 @@ forget_bounds_of_partition(Oid partition)
 }
 
 /* Return partition's constraint as expression tree */
-PartBoundInfo *
+static PartBoundInfo *
 get_bounds_of_partition(Oid partition, const PartRelationInfo *prel)
 {
 	PartBoundInfo *pbin;
@@ -1178,6 +1156,14 @@ fill_pbin_with_bounds(PartBoundInfo *pbin,
 	AssertTemporaryContext();
 
 	/* Copy partitioning type to 'pbin' */
+	if (IsA(constraint_expr, NullTest))
+	{
+		pbin->parttype = PT_NULL;
+
+		/* we're done here */
+		return;
+	}
+
 	pbin->parttype = prel->parttype;
 
 	/* Perform a partitioning_type-dependent task */

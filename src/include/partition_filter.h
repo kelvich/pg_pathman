@@ -136,7 +136,8 @@ Oid * find_partitions_for_value(Datum value, Oid value_type,
 ResultRelInfoHolder * select_partition_for_insert(Datum value, Oid value_type,
 												  const PartRelationInfo *prel,
 												  ResultPartsStorage *parts_storage,
-												  EState *estate);
+												  EState *estate,
+												  bool is_null);
 
 
 Plan * make_partition_filter(Plan *subplan,
