@@ -128,9 +128,6 @@ INSERT INTO test.range_rel (dt, txt)
 SELECT g, md5(g::TEXT) FROM generate_series('2015-01-01', '2015-04-30', '1 day'::interval) as g;
 SELECT pathman.create_range_partitions('test.range_rel', 'dt', '2015-01-01'::DATE, '1 month'::INTERVAL, 2);
 ERROR:  not enough partitions to fit all values of "dt"
-SELECT pathman.create_range_partitions('test.range_rel', 'dt', '2015-01-01'::DATE, '1 month'::INTERVAL);
-ERROR:  partitioning key "dt" must be marked NOT NULL
-ALTER TABLE test.range_rel ALTER COLUMN dt SET NOT NULL;
 SELECT pathman.create_range_partitions('test.range_rel', 'DT', '2015-01-01'::DATE, '1 month'::INTERVAL);
  create_range_partitions 
 -------------------------
@@ -1348,11 +1345,6 @@ CREATE TABLE test.range_rel_test1 (
 	abc INTEGER);
 SELECT pathman.attach_range_partition('test.range_rel', 'test.range_rel_test1', '2013-01-01'::DATE, '2014-01-01'::DATE);
 ERROR:  partition must have a compatible tuple format
-CREATE TABLE test.range_rel_test2 (
-	id  SERIAL PRIMARY KEY,
-	dt  TIMESTAMP);
-SELECT pathman.attach_range_partition('test.range_rel', 'test.range_rel_test2', '2013-01-01'::DATE, '2014-01-01'::DATE);
-ERROR:  column "dt" in child table must be marked NOT NULL
 /* Half open ranges */
 SELECT pathman.add_range_partition('test.range_rel', NULL, '2014-12-01'::DATE, 'test.range_rel_minus_infinity');
       add_range_partition      
@@ -1476,7 +1468,7 @@ SELECT pathman.replace_hash_partition('test.hash_rel_0', 'test.hash_rel_extern')
  Column |  Type   |                         Modifiers                          | Storage | Stats target | Description 
 --------+---------+------------------------------------------------------------+---------+--------------+-------------
  id     | integer | not null default nextval('test.hash_rel_id_seq'::regclass) | plain   |              | 
- value  | integer | not null                                                   | plain   |              | 
+ value  | integer |                                                            | plain   |              | 
  abc    | integer |                                                            | plain   |              | 
 Indexes:
     "hash_rel_0_pkey" PRIMARY KEY, btree (id)
@@ -1486,7 +1478,7 @@ Indexes:
  Column |  Type   |                         Modifiers                          | Storage | Stats target | Description 
 --------+---------+------------------------------------------------------------+---------+--------------+-------------
  id     | integer | not null default nextval('test.hash_rel_id_seq'::regclass) | plain   |              | 
- value  | integer | not null                                                   | plain   |              | 
+ value  | integer |                                                            | plain   |              | 
  abc    | integer |                                                            | plain   |              | 
 Indexes:
     "hash_rel_extern_pkey" PRIMARY KEY, btree (id)
@@ -1501,7 +1493,7 @@ CREATE TABLE test.hash_rel_wrong(
 	id		INTEGER NOT NULL,
 	value	INTEGER);
 SELECT pathman.replace_hash_partition('test.hash_rel_1', 'test.hash_rel_wrong');
-ERROR:  column "value" in child table must be marked NOT NULL
+ERROR:  child table is missing column "abc"
 EXPLAIN (COSTS OFF) SELECT * FROM test.hash_rel;
             QUERY PLAN             
 -----------------------------------
@@ -2190,6 +2182,6 @@ ORDER BY partition;
 DROP TABLE test.provided_part_names CASCADE;
 NOTICE:  drop cascades to 2 other objects
 DROP SCHEMA test CASCADE;
-NOTICE:  drop cascades to 42 other objects
+NOTICE:  drop cascades to 41 other objects
 DROP EXTENSION pg_pathman CASCADE;
 DROP SCHEMA pathman CASCADE;
