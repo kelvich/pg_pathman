@@ -478,31 +478,44 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 					{
 						RangeEntry *re;
 
-						re = &PrelGetRangesArray(prel)[usercxt->child_number];
-
-						values[Anum_pathman_pl_partition - 1] = re->child_oid;
-
-						/* Lower bound text */
-						if (!IsInfinite(&re->min))
+						if (prel->has_null_partition
+								&& usercxt->child_number == PrelNullPartition(prel))
 						{
-							Datum rmin = CStringGetTextDatum(
-											datum_to_cstring(BoundGetValue(&re->min),
-															 prel->ev_type));
+							Oid	 *children = PrelGetChildrenArray(prel),
+								  child_oid = children[usercxt->child_number];
 
-							values[Anum_pathman_pl_range_min - 1] = rmin;
+							values[Anum_pathman_pl_partition - 1] = child_oid;
+							isnull[Anum_pathman_pl_range_min - 1] = true;
+							isnull[Anum_pathman_pl_range_max - 1] = true;
 						}
-						else isnull[Anum_pathman_pl_range_min - 1] = true;
-
-						/* Upper bound text */
-						if (!IsInfinite(&re->max))
+						else
 						{
-							Datum rmax = CStringGetTextDatum(
-											datum_to_cstring(BoundGetValue(&re->max),
-															 prel->ev_type));
+							re = &PrelGetRangesArray(prel)[usercxt->child_number];
 
-							values[Anum_pathman_pl_range_max - 1] = rmax;
+							values[Anum_pathman_pl_partition - 1] = re->child_oid;
+
+							/* Lower bound text */
+							if (!IsInfinite(&re->min))
+							{
+								Datum rmin = CStringGetTextDatum(
+												datum_to_cstring(BoundGetValue(&re->min),
+																 prel->ev_type));
+
+								values[Anum_pathman_pl_range_min - 1] = rmin;
+							}
+							else isnull[Anum_pathman_pl_range_min - 1] = true;
+
+							/* Upper bound text */
+							if (!IsInfinite(&re->max))
+							{
+								Datum rmax = CStringGetTextDatum(
+												datum_to_cstring(BoundGetValue(&re->max),
+																 prel->ev_type));
+
+								values[Anum_pathman_pl_range_max - 1] = rmax;
+							}
+							else isnull[Anum_pathman_pl_range_max - 1] = true;
 						}
-						else isnull[Anum_pathman_pl_range_max - 1] = true;
 					}
 					break;
 
