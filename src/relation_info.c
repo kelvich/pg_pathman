@@ -450,12 +450,13 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 	prel->ranges	= NULL;
 	prel->has_null_partition = false;
 
-	if (prel->parttype == PT_RANGE)
-		prel->ranges = MemoryContextAllocZero(cache_mcxt,
-											  parts_count * sizeof(RangeEntry));
-
 	/* Set number of children */
 	PrelChildrenCount(prel) = parts_count;
+
+	/* Now we can use PrelRangePartitionsCount macros */
+	if (prel->parttype == PT_RANGE)
+		prel->ranges = MemoryContextAllocZero(cache_mcxt,
+						PrelRangePartitionsCount(prel) * sizeof(RangeEntry));
 
 	/* Create temporary memory context for loop */
 	temp_mcxt = AllocSetContextCreate(CurrentMemoryContext,
@@ -1111,7 +1112,7 @@ get_bounds_of_partition(Oid partition, const PartRelationInfo *prel)
 				NULL; /* don't even bother */
 
 	/* Build new entry */
-	if (!pbin)
+	if (pbin == NULL)
 	{
 		PartBoundInfo	pbin_local;
 		Expr		   *con_expr;
