@@ -74,6 +74,9 @@ static void handle_nulltest(const NullTest *nulltest,
 							const WalkerContext *context,
 							WrapperNode *result);
 
+static void handle_null(const PartRelationInfo *prel, WrapperNode *result,
+						NullTestType testtype);
+
 static bool is_key_op_param(const OpExpr *expr,
 							const WalkerContext *context,
 							Node **param_ptr);
@@ -743,17 +746,8 @@ handle_const(const Const *c,
 	 */
 	if (c->constisnull)
 	{
-		if (prel->has_null_partition)
-		{
-			uint32 idx = PrelNullPartition(prel);
-			result->rangeset = list_make1_irange(make_irange(idx, idx, IR_LOSSY));
-			result->paramsel = estimate_paramsel_using_prel(prel, strategy);
-		}
-		else
-		{
-			result->rangeset = NIL;
-			result->paramsel = 0.0;
-		}
+		result->rangeset = NIL;
+		result->paramsel = 0.0;
 
 		return; /* done, exit */
 	}
@@ -1066,6 +1060,37 @@ handle_opexpr(const OpExpr *expr,
 	result->orig = (const Node *) expr;
 }
 
+static void
+handle_null(const PartRelationInfo *prel, WrapperNode *result,
+			NullTestType testtype)
+{
+	if (prel->has_null_partition)
+	{
+		uint32	idx			= PrelNullPartition(prel);
+		float	paramsel	= estimate_paramsel_using_prel(prel,
+													BTEqualStrategyNumber);
+
+		if (testtype == IS_NULL)
+		{
+			result->rangeset = list_make1_irange(make_irange(idx, idx, IR_COMPLETE));
+			result->paramsel = paramsel;
+		}
+		else
+		{
+			result->rangeset = list_make1_irange(make_irange(0, idx - 1, IR_COMPLETE));
+			result->paramsel = 1.0 - paramsel;	/* opposite */
+		}
+
+		return;
+	}
+
+	if (testtype == IS_NULL)
+	{
+		result->rangeset = NIL;
+		result->paramsel = 0.0;
+	}
+}
+
 /* Operator expression handler */
 static void
 handle_nulltest(const NullTest *nulltest,
@@ -1077,28 +1102,12 @@ handle_nulltest(const NullTest *nulltest,
 	result->orig = (const Node *) nulltest;
 
 	if (match_expr_to_operand((Node *) nulltest->arg, context->prel_expr))
+		handle_null(prel, result, nulltest->nulltesttype);
+	else
 	{
-		if (prel->has_null_partition)
-		{
-			uint32 idx = PrelNullPartition(prel);
-			if (nulltest->nulltesttype == IS_NULL)
-				result->rangeset = list_make1_irange(make_irange(idx, idx, IR_LOSSY));
-			else
-				result->rangeset = list_make1_irange(make_irange(0, idx - 1, IR_LOSSY));
-
-			result->paramsel = 1.0;
-			return;
-		}
-		else if (nulltest->nulltesttype == IS_NULL)
-		{
-			result->rangeset = NIL;
-			result->paramsel = 0.0;
-			return;
-		}
+		result->rangeset = list_make1_irange_full(prel, IR_COMPLETE);
+		result->paramsel = 1.0; /* can't give any estimates */
 	}
-
-	result->rangeset = list_make1_irange_full(prel, IR_COMPLETE);
-	result->paramsel = 1.0; /* can't give any estimates */
 }
 
 /*

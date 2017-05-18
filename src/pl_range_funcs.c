@@ -488,13 +488,13 @@ get_part_range_by_idx(PG_FUNCTION_ARGS)
 	}
 	else if (partition_idx == -1)
 	{
-		partition_idx = PrelHashPartitionsCount(prel) - 1;
+		partition_idx = PrelRangePartitionsCount(prel) - 1;
 	}
-	else if (((uint32) abs(partition_idx)) >= PrelHashPartitionsCount(prel))
+	else if (((uint32) abs(partition_idx)) >= PrelRangePartitionsCount(prel))
 	{
 		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("partition #%d does not exist (total amount is %u)",
-							   partition_idx, PrelHashPartitionsCount(prel))));
+							   partition_idx, PrelRangePartitionsCount(prel))));
 	}
 
 	ranges = PrelGetRangesArray(prel);

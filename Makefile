@@ -38,6 +38,7 @@ REGRESS = pathman_basic \
 		  pathman_join_clause \
 		  pathman_lateral \
 		  pathman_mergejoin \
+		  pathman_null_partition \
 		  pathman_only \
 		  pathman_permissions \
 		  pathman_rowmarks \

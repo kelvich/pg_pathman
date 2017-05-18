@@ -22,6 +22,12 @@ EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, value
 		FROM test_nulls.hash_rel WHERE value IS NULL;
 SELECT tableoid::REGCLASS, value FROM test_nulls.hash_rel WHERE value IS NULL;
 
+EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, value
+		FROM test_nulls.hash_rel WHERE value IS NOT NULL;
+
+EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, value
+		FROM test_nulls.hash_rel WHERE value IS NOT NULL AND value = 4;
+
 DROP TABLE test_nulls.hash_rel CASCADE;
 
 /* range */
@@ -44,6 +50,21 @@ SELECT * FROM pathman_partition_list ORDER BY partition;
 EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, dt
 				    FROM test_nulls.range_rel WHERE dt IS NULL;
 SELECT tableoid::REGCLASS, dt FROM test_nulls.range_rel WHERE dt IS NULL;
+
+EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, dt
+				    FROM test_nulls.range_rel WHERE dt IS NOT NULL;
+
+EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, dt
+				    FROM test_nulls.range_rel WHERE dt IS NOT NULL AND dt > '2015-03-01'::DATE;
+
+EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, dt
+				    FROM test_nulls.range_rel WHERE dt IS NOT NULL OR dt > '2015-03-01'::DATE;
+
+EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, dt
+				    FROM test_nulls.range_rel WHERE dt IS NULL OR dt > '2015-03-01'::DATE;
+
+EXPLAIN (COSTS OFF) SELECT tableoid::REGCLASS, dt
+				    FROM test_nulls.range_rel WHERE dt IS NULL AND dt > '2015-03-01'::DATE;
 
 DROP SCHEMA test_nulls CASCADE;
 DROP EXTENSION pg_pathman CASCADE;
