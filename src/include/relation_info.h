@@ -264,7 +264,7 @@ PrelNullPartition(const PartRelationInfo *prel)
 	Assert(PrelIsValid(prel));
 	Assert(prel->has_null_partition);
 
-	return PrelLastChild(prel) - 1; /* last partition */
+	return PrelLastChild(prel); /* last partition */
 }
 
 static inline List *

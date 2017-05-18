@@ -494,7 +494,10 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 
 			case PT_RANGE:
 				{
-					Assert(i < PrelRangePartitionsCount(prel));
+					if (i >= PrelRangePartitionsCount(prel))
+						/* this shouldn't happen but we check anyway,
+						 * also removes clang error */
+						elog(ERROR, "range array overflow");
 
 					/* Copy child's Oid */
 					prel->ranges[i].child_oid = bound_info->child_rel;

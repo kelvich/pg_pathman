@@ -70,6 +70,10 @@ static void handle_opexpr(const OpExpr *expr,
 						  const WalkerContext *context,
 						  WrapperNode *result);
 
+static void handle_nulltest(const NullTest *nulltest,
+							const WalkerContext *context,
+							WrapperNode *result);
+
 static bool is_key_op_param(const OpExpr *expr,
 							const WalkerContext *context,
 							Node **param_ptr);
@@ -631,6 +635,11 @@ walk_expr_tree(Expr *expr, const WalkerContext *context)
 			handle_arrexpr((ScalarArrayOpExpr *) expr, context, result);
 			return result;
 
+		/* IS (NOT) NULL */
+		case T_NullTest:
+			handle_nulltest((NullTest *) expr, context, result);
+			return result;
+
 		default:
 			result->orig = (const Node *) expr;
 			result->args = NIL;
@@ -736,7 +745,7 @@ handle_const(const Const *c,
 	{
 		if (prel->has_null_partition)
 		{
-			uint32 idx = PrelLastChild(prel);
+			uint32 idx = PrelNullPartition(prel);
 			result->rangeset = list_make1_irange(make_irange(idx, idx, IR_LOSSY));
 			result->paramsel = estimate_paramsel_using_prel(prel, strategy);
 		}
@@ -1057,6 +1066,40 @@ handle_opexpr(const OpExpr *expr,
 	result->orig = (const Node *) expr;
 }
 
+/* Operator expression handler */
+static void
+handle_nulltest(const NullTest *nulltest,
+				const WalkerContext *context,
+				WrapperNode *result)
+{
+	const PartRelationInfo *prel = context->prel;
+
+	result->orig = (const Node *) nulltest;
+
+	if (match_expr_to_operand((Node *) nulltest->arg, context->prel_expr))
+	{
+		if (prel->has_null_partition)
+		{
+			uint32 idx = PrelNullPartition(prel);
+			if (nulltest->nulltesttype == IS_NULL)
+				result->rangeset = list_make1_irange(make_irange(idx, idx, IR_LOSSY));
+			else
+				result->rangeset = list_make1_irange(make_irange(0, idx - 1, IR_LOSSY));
+
+			result->paramsel = 1.0;
+			return;
+		}
+		else if (nulltest->nulltesttype == IS_NULL)
+		{
+			result->rangeset = NIL;
+			result->paramsel = 0.0;
+			return;
+		}
+	}
+
+	result->rangeset = list_make1_irange_full(prel, IR_COMPLETE);
+	result->paramsel = 1.0; /* can't give any estimates */
+}
 
 /*
  * Checks if expression is a KEY OP PARAM or PARAM OP KEY, where

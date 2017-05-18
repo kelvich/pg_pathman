@@ -502,6 +502,7 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 																 prel->ev_type));
 
 								values[Anum_pathman_pl_range_min - 1] = rmin;
+								isnull[Anum_pathman_pl_range_min - 1] = false;
 							}
 							else isnull[Anum_pathman_pl_range_min - 1] = true;
 
@@ -513,6 +514,7 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 																 prel->ev_type));
 
 								values[Anum_pathman_pl_range_max - 1] = rmax;
+								isnull[Anum_pathman_pl_range_max - 1] = false;
 							}
 							else isnull[Anum_pathman_pl_range_max - 1] = true;
 						}
