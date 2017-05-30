@@ -26,6 +26,7 @@
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/var.h"
+#include "parser/analyze.h"
 #include "parser/parser.h"
 #include "storage/lmgr.h"
 #include "tcop/tcopprot.h"
@@ -33,6 +34,7 @@
 #include "utils/fmgroids.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/ruleutils.h"
 #include "utils/syscache.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
@@ -44,6 +46,11 @@
 #if PG_VERSION_NUM >= 90600
 #include "catalog/pg_constraint_fn.h"
 #endif
+
+
+/* Error messages for partitioning expression */
+#define PARSE_PART_EXPR_ERROR	"failed to parse partitioning expression \"%s\""
+#define COOK_PART_EXPR_ERROR	"failed to analyze partitioning expression \"%s\""
 
 
 /* Comparison function info */
@@ -81,8 +88,12 @@ static bool		delayed_shutdown = false; /* pathman was dropped */
 		list = NIL; \
 	} while (0)
 
+/* Handy wrappers for Oids */
+#define bsearch_oid(key, array, array_size) \
+	bsearch((const void *) &(key), (array), (array_size), sizeof(Oid), oid_cmp)
 
-static bool try_perform_parent_refresh(Oid parent);
+
+static bool try_invalidate_parent(Oid relid, Oid *parents, int parents_count);
 static Oid try_syscache_parent_search(Oid partition, PartParentSearch *status);
 static Oid get_parent_of_partition_internal(Oid partition,
 											PartParentSearch *status,
@@ -100,8 +111,8 @@ static void fill_pbin_with_bounds(PartBoundInfo *pbin,
 
 static int cmp_range_entries(const void *p1, const void *p2, void *arg);
 
-static PartBoundInfo *get_bounds_of_partition(Oid partition,
-											  const PartRelationInfo *prel);
+static bool query_contains_subqueries(Node *node, void *context);
+
 
 void
 init_relation_info_static_data(void)
@@ -136,8 +147,6 @@ refresh_pathman_relation_info(Oid relid,
 	Datum					param_values[Natts_pathman_config_params];
 	bool					param_isnull[Natts_pathman_config_params];
 	char				   *expr;
-	Relids					expr_varnos;
-	HeapTuple				htup;
 	MemoryContext			old_mcxt;
 
 	AssertTemporaryContext();
@@ -179,10 +188,6 @@ refresh_pathman_relation_info(Oid relid,
 	prel->expr = (Node *) stringToNode(expr);
 	fix_opfuncids(prel->expr);
 
-	expr_varnos = pull_varnos(prel->expr);
-	if (bms_singleton_member(expr_varnos) != PART_EXPR_VARNO)
-		elog(ERROR, "partitioning expression may reference only one table");
-
 	/* Extract Vars and varattnos of partitioning expression */
 	prel->expr_vars = NIL;
 	prel->expr_atts = NULL;
@@ -193,16 +198,8 @@ refresh_pathman_relation_info(Oid relid,
 
 	/* First, fetch type of partitioning expression */
 	prel->ev_type	= exprType(prel->expr);
-
-	htup = SearchSysCache1(TYPEOID, prel->ev_type);
-	if (HeapTupleIsValid(htup))
-	{
-		Form_pg_type typtup = (Form_pg_type) GETSTRUCT(htup);
-		prel->ev_typmod = typtup->typtypmod;
-		prel->ev_collid = typtup->typcollation;
-		ReleaseSysCache(htup);
-	}
-	else elog(ERROR, "cache lookup failed for type %u", prel->ev_type);
+	prel->ev_typmod	= exprTypmod(prel->expr);
+	prel->ev_collid = exprCollation(prel->expr);
 
 	/* Fetch HASH & CMP fuctions and other stuff from type cache */
 	typcache = lookup_type_cache(prel->ev_type,
@@ -563,6 +560,17 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 #endif
 }
 
+/* qsort comparison function for RangeEntries */
+static int
+cmp_range_entries(const void *p1, const void *p2, void *arg)
+{
+	const RangeEntry   *v1 = (const RangeEntry *) p1;
+	const RangeEntry   *v2 = (const RangeEntry *) p2;
+	cmp_func_info	   *info = (cmp_func_info *) arg;
+
+	return cmp_bounds(&info->flinfo, info->collid, &v1->min, &v2->min);
+}
+
 
 /*
  * Partitioning expression routines.
@@ -571,7 +579,7 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 /* Wraps expression in SELECT query and returns parse tree */
 Node *
 parse_partitioning_expression(const Oid relid,
-							  const char *exp_cstr,
+							  const char *expr_cstr,
 							  char **query_string_out,	/* ret value #1 */
 							  Node **parsetree_out)		/* ret value #2 */
 {
@@ -582,7 +590,7 @@ parse_partitioning_expression(const Oid relid,
 	const char *sql = "SELECT (%s) FROM ONLY %s.%s";
 	char	   *relname = get_rel_name(relid),
 			   *nspname = get_namespace_name(get_rel_namespace(relid));
-	char	   *query_string = psprintf(sql, exp_cstr,
+	char	   *query_string = psprintf(sql, expr_cstr,
 										quote_identifier(nspname),
 										quote_identifier(relname));
 
@@ -601,18 +609,19 @@ parse_partitioning_expression(const Oid relid,
 		error = CopyErrorData();
 		FlushErrorState();
 
-		error->detail = error->message;
-		error->message = "partitioning expression parse error";
-		error->sqlerrcode = ERRCODE_INVALID_PARAMETER_VALUE;
-		error->cursorpos = 0;
-		error->internalpos = 0;
+		/* Adjust error message */
+		error->detail		= error->message;
+		error->message		= psprintf(PARSE_PART_EXPR_ERROR, expr_cstr);
+		error->sqlerrcode	= ERRCODE_INVALID_PARAMETER_VALUE;
+		error->cursorpos	= 0;
+		error->internalpos	= 0;
 
 		ReThrowError(error);
 	}
 	PG_END_TRY();
 
 	if (list_length(parsetree_list) != 1)
-		elog(ERROR, "expression \"%s\" produced more than one query", exp_cstr);
+		elog(ERROR, "expression \"%s\" produced more than one query", expr_cstr);
 
 	select_stmt = (SelectStmt *) linitial(parsetree_list);
 
@@ -629,106 +638,164 @@ parse_partitioning_expression(const Oid relid,
 Datum
 cook_partitioning_expression(const Oid relid,
 							 const char *expr_cstr,
-							 Oid *expr_type_out) /* ret value #1 */
+							 Oid *expr_type_out)		/* ret value #1 */
 {
-	Node				   *parsetree;
-	List				   *querytree_list;
-	TargetEntry			   *target_entry;
+	Node		   *parse_tree;
+	List		   *query_tree_list;
 
-	Query				   *expr_query;
-	PlannedStmt			   *expr_plan;
-	Node				   *expr;
-	Datum					expr_datum;
+	char		   *query_string,
+				   *expr_serialized = ""; /* keep compiler happy */
 
-	char				   *query_string,
-						   *expr_serialized;
+	Datum			expr_datum;
 
-	MemoryContext			parse_mcxt,
-							old_mcxt;
+	MemoryContext	parse_mcxt,
+					old_mcxt;
 
 	AssertTemporaryContext();
 
+	/*
+	 * We use separate memory context here, just to make sure we won't
+	 * leave anything behind after parsing, rewriting and planning.
+	 */
 	parse_mcxt = AllocSetContextCreate(CurrentMemoryContext,
-									   "pathman parse context",
+									   CppAsString(cook_partitioning_expression),
 									   ALLOCSET_DEFAULT_SIZES);
 
-	/* Keep raw expression */
-	parse_partitioning_expression(relid, expr_cstr,
-									&query_string, &parsetree);
-
-	/* We don't need pathman activity initialization for this relation yet */
-	pathman_hooks_enabled = false;
-
-	/*
-	 * We use separate memory context here, just to make sure we
-	 * don't leave anything behind after analyze and planning.
-	 * Parsed raw expression will stay in caller's context.
-	 */
+	/* Switch to mcxt for cooking :) */
 	old_mcxt = MemoryContextSwitchTo(parse_mcxt);
+
+	/* Keep raw expression */
+	(void) parse_partitioning_expression(relid, expr_cstr,
+										 &query_string, &parse_tree);
+
+	/* We don't need pg_pathman's magic here */
+	pathman_hooks_enabled = false;
 
 	PG_TRY();
 	{
-		/* This will fail with elog in case of wrong expression */
-		querytree_list = pg_analyze_and_rewrite(parsetree, query_string, NULL, 0);
+		Query	   *query;
+		Node	   *expr;
+		Relids		expr_varnos;
+
+		/* This will fail with ERROR in case of wrong expression */
+		query_tree_list = pg_analyze_and_rewrite(parse_tree, query_string, NULL, 0);
+
+		/* Sanity check #1 */
+		if (list_length(query_tree_list) != 1)
+			elog(ERROR, "partitioning expression produced more than 1 query");
+
+		query = (Query *) linitial(query_tree_list);
+
+		/* Sanity check #2 */
+		if (list_length(query->targetList) != 1)
+			elog(ERROR, "there should be exactly 1 partitioning expression");
+
+		/* Sanity check #3 */
+		if (query_tree_walker(query, query_contains_subqueries, NULL, 0))
+			elog(ERROR, "subqueries are not allowed in partitioning expression");
+
+		expr = (Node *) ((TargetEntry *) linitial(query->targetList))->expr;
+		expr = eval_const_expressions(NULL, expr);
+
+		/* Sanity check #4 */
+		if (contain_mutable_functions(expr))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("functions in partitioning expression"
+							" must be marked IMMUTABLE")));
+
+		/* Sanity check #5 */
+		expr_varnos = pull_varnos(expr);
+		if (bms_num_members(expr_varnos) != 1 ||
+			((RangeTblEntry *) linitial(query->rtable))->relid != relid)
+		{
+			elog(ERROR, "partitioning expression should reference table \"%s\"",
+				 get_rel_name(relid));
+		}
+		bms_free(expr_varnos);
+
+		Assert(expr);
+		expr_serialized = nodeToString(expr);
+
+		/* Set 'expr_type_out' if needed */
+		if (expr_type_out)
+			*expr_type_out = exprType(expr);
 	}
 	PG_CATCH();
 	{
 		ErrorData  *error;
+
+		/* Don't forget to enable pg_pathman's hooks */
+		pathman_hooks_enabled = true;
 
 		/* Switch to the original context & copy edata */
 		MemoryContextSwitchTo(old_mcxt);
 		error = CopyErrorData();
 		FlushErrorState();
 
-		error->detail = error->message;
-		error->message = "partitioning expression analyze error";
-		error->sqlerrcode = ERRCODE_INVALID_PARAMETER_VALUE;
-		error->cursorpos = 0;
-		error->internalpos = 0;
+		/* Adjust error message */
+		error->detail		= error->message;
+		error->message		= psprintf(COOK_PART_EXPR_ERROR, expr_cstr);
+		error->sqlerrcode	= ERRCODE_INVALID_PARAMETER_VALUE;
+		error->cursorpos	= 0;
+		error->internalpos	= 0;
 
-		/* Enable pathman hooks */
-		pathman_hooks_enabled = true;
 		ReThrowError(error);
 	}
 	PG_END_TRY();
 
-	if (list_length(querytree_list) != 1)
-		elog(ERROR, "partitioning expression produced more than 1 query");
-
-	expr_query = (Query *) linitial(querytree_list);
-
-	/* Plan this query. We reuse 'expr_node' here */
-	expr_plan = pg_plan_query(expr_query, 0, NULL);
-
-	target_entry = IsA(expr_plan->planTree, IndexOnlyScan) ?
-					linitial(((IndexOnlyScan *) expr_plan->planTree)->indextlist) :
-					linitial(expr_plan->planTree->targetlist);
-
-	expr = eval_const_expressions(NULL, (Node *) target_entry->expr);
-	if (contain_mutable_functions(expr))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("functions in partitioning expression must be marked IMMUTABLE")));
-
-	Assert(expr);
-	expr_serialized = nodeToString(expr);
+	/* Don't forget to enable pg_pathman's hooks */
+	pathman_hooks_enabled = true;
 
 	/* Switch to previous mcxt */
 	MemoryContextSwitchTo(old_mcxt);
 
-	/* Set 'expr_type_out' if needed */
-	if (expr_type_out)
-		*expr_type_out = exprType(expr);
-
+	/* Get Datum of serialized expression (right mcxt) */
 	expr_datum = CStringGetTextDatum(expr_serialized);
 
 	/* Free memory */
 	MemoryContextDelete(parse_mcxt);
 
-	/* Enable pathman hooks */
-	pathman_hooks_enabled = true;
-
 	return expr_datum;
+}
+
+/* Canonicalize user's expression (trim whitespaces etc) */
+char *
+canonicalize_partitioning_expression(const Oid relid,
+									 const char *expr_cstr)
+{
+	Node		   *parse_tree;
+	Expr		   *expr;
+	char		   *query_string;
+	Query		   *query;
+
+	AssertTemporaryContext();
+
+	/* First we have to build a raw AST */
+	(void) parse_partitioning_expression(relid, expr_cstr,
+										 &query_string, &parse_tree);
+
+	query = parse_analyze(parse_tree, query_string, NULL, 0);
+	expr = ((TargetEntry *) linitial(query->targetList))->expr;
+
+	/* We don't care about memory efficiency here */
+	return deparse_expression((Node *) expr,
+							  deparse_context_for(get_rel_name(relid), relid),
+							  false, false);
+}
+
+/* Check if query has subqueries */
+static bool
+query_contains_subqueries(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	/* We've met a subquery */
+	if (IsA(node, Query))
+		return true;
+
+	return expression_tree_walker(node, query_contains_subqueries, NULL);
 }
 
 
@@ -772,6 +839,9 @@ finish_delayed_invalidation(void)
 	/* Check that current state is transactional */
 	if (IsTransactionState())
 	{
+		Oid		   *parents = NULL;
+		int			parents_count;
+		bool		parents_fetched = false;
 		ListCell   *lc;
 
 		/* Handle the probable 'DROP EXTENSION' case */
@@ -811,11 +881,19 @@ finish_delayed_invalidation(void)
 			if (IsToastNamespace(get_rel_namespace(parent)))
 				continue;
 
-			if (!pathman_config_contains_relation(parent, NULL, NULL, NULL, NULL))
-				remove_pathman_relation_info(parent);
-			else
+			/* Fetch all partitioned tables */
+			if (!parents_fetched)
+			{
+				parents = read_parent_oids(&parents_count);
+				parents_fetched = true;
+			}
+
+			/* Check if parent still exists */
+			if (bsearch_oid(parent, parents, parents_count))
 				/* get_pathman_relation_info() will refresh this entry */
 				invalidate_pathman_relation_info(parent, NULL);
+			else
+				remove_pathman_relation_info(parent);
 		}
 
 		/* Process all other vague cases */
@@ -827,8 +905,15 @@ finish_delayed_invalidation(void)
 			if (IsToastNamespace(get_rel_namespace(vague_rel)))
 				continue;
 
+			/* Fetch all partitioned tables */
+			if (!parents_fetched)
+			{
+				parents = read_parent_oids(&parents_count);
+				parents_fetched = true;
+			}
+
 			/* It might be a partitioned table or a partition */
-			if (!try_perform_parent_refresh(vague_rel))
+			if (!try_invalidate_parent(vague_rel, parents, parents_count))
 			{
 				PartParentSearch	search;
 				Oid					parent;
@@ -838,21 +923,17 @@ finish_delayed_invalidation(void)
 
 				switch (search)
 				{
-					/* It's still parent */
+					/*
+					 * Two main cases:
+					 *	- It's *still* parent (in PATHMAN_CONFIG)
+					 *	- It *might have been* parent before (not in PATHMAN_CONFIG)
+					 */
 					case PPS_ENTRY_PART_PARENT:
-						{
-							/* Skip if we've already refreshed this parent */
-							if (!list_member_oid(fresh_rels, parent))
-								try_perform_parent_refresh(parent);
-						}
-						break;
-
-					/* It *might have been* parent before (not in PATHMAN_CONFIG) */
 					case PPS_ENTRY_PARENT:
 						{
 							/* Skip if we've already refreshed this parent */
 							if (!list_member_oid(fresh_rels, parent))
-								try_perform_parent_refresh(parent);
+								try_invalidate_parent(parent, parents, parents_count);
 						}
 						break;
 
@@ -869,6 +950,9 @@ finish_delayed_invalidation(void)
 
 		free_invalidation_list(delayed_invalidation_parent_rels);
 		free_invalidation_list(delayed_invalidation_vague_rels);
+
+		if (parents)
+			pfree(parents);
 	}
 }
 
@@ -1028,39 +1112,30 @@ try_syscache_parent_search(Oid partition, PartParentSearch *status)
 	}
 }
 
-/*
- * Try to refresh cache entry for relation 'parent'.
- *
- * Return true on success.
- */
+/* Try to invalidate cache entry for relation 'parent' */
 static bool
-try_perform_parent_refresh(Oid parent)
+try_invalidate_parent(Oid relid, Oid *parents, int parents_count)
 {
-	ItemPointerData		iptr;
-	Datum				values[Natts_pathman_config];
-	bool				isnull[Natts_pathman_config];
-
-	if (pathman_config_contains_relation(parent, values, isnull, NULL, &iptr))
+	/* Check if this is a partitioned table */
+	if (bsearch_oid(relid, parents, parents_count))
 	{
-		bool should_update_expr = isnull[Anum_pathman_config_cooked_expr - 1];
+		/* get_pathman_relation_info() will refresh this entry */
+		invalidate_pathman_relation_info(relid, NULL);
 
-		if (should_update_expr)
-			pathman_config_refresh_parsed_expression(parent, values, isnull, &iptr);
-
-		/* If anything went wrong, return false (actually, it might emit ERROR) */
-		refresh_pathman_relation_info(parent,
-									  values,
-									  true); /* allow lazy */
+		/* Success */
+		return true;
 	}
-	/* Not a partitioned relation */
-	else return false;
 
-	return true;
+	/* Clear remaining cache entry */
+	remove_pathman_relation_info(relid);
+
+	/* Not a partitioned relation */
+	return false;
 }
 
 
 /*
- * forget\get constraint functions.
+ * forget\get bounds functions.
  */
 
 /* Remove partition's constraint from cache */
@@ -1096,7 +1171,7 @@ forget_bounds_of_partition(Oid partition)
 }
 
 /* Return partition's constraint as expression tree */
-static PartBoundInfo *
+PartBoundInfo *
 get_bounds_of_partition(Oid partition, const PartRelationInfo *prel)
 {
 	PartBoundInfo *pbin;
@@ -1282,17 +1357,6 @@ fill_pbin_with_bounds(PartBoundInfo *pbin,
 			}
 			break;
 	}
-}
-
-/* qsort comparison function for RangeEntries */
-static int
-cmp_range_entries(const void *p1, const void *p2, void *arg)
-{
-	const RangeEntry   *v1 = (const RangeEntry *) p1;
-	const RangeEntry   *v2 = (const RangeEntry *) p2;
-	cmp_func_info	   *info = (cmp_func_info *) arg;
-
-	return cmp_bounds(&info->flinfo, info->collid, &v1->min, &v2->min);
 }
 
 

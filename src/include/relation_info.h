@@ -87,7 +87,7 @@ FreeBound(Bound *bound, bool byval)
 		pfree(DatumGetPointer(BoundGetValue(bound)));
 }
 
-inline static int
+static inline int
 cmp_bounds(FmgrInfo *cmp_func,
 		   const Oid collid,
 		   const Bound *b1,
@@ -313,13 +313,16 @@ const PartRelationInfo *get_pathman_relation_info_after_lock(Oid relid,
 
 /* Partitioning expression routines */
 Node *parse_partitioning_expression(const Oid relid,
-									const char *expression,
+									const char *expr_cstr,
 									char **query_string_out,
 									Node **parsetree_out);
 
 Datum cook_partitioning_expression(const Oid relid,
 								   const char *expr_cstr,
 								   Oid *expr_type);
+
+char *canonicalize_partitioning_expression(const Oid relid,
+										   const char *expr_cstr);
 
 /* Global invalidation routines */
 void delay_pathman_shutdown(void);
@@ -334,6 +337,8 @@ Oid get_parent_of_partition(Oid partition, PartParentSearch *status);
 
 /* Bounds cache */
 void forget_bounds_of_partition(Oid partition);
+PartBoundInfo *get_bounds_of_partition(Oid partition,
+									   const PartRelationInfo *prel);
 
 /* PartType wrappers */
 

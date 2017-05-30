@@ -91,10 +91,6 @@ pathman_join_pathlist_hook(PlannerInfo *root,
 		set_join_pathlist_next(root, joinrel, outerrel,
 							   innerrel, jointype, extra);
 
-	/* Hooks can be disabled */
-	if (!pathman_hooks_enabled)
-		return;
-
 	/* Check that both pg_pathman & RuntimeAppend nodes are enabled */
 	if (!IsPathmanReady() || !pg_pathman_enable_runtimeappend)
 		return;
@@ -288,10 +284,6 @@ pathman_rel_pathlist_hook(PlannerInfo *root,
 	/* Invoke original hook if needed */
 	if (set_rel_pathlist_hook_next != NULL)
 		set_rel_pathlist_hook_next(root, rel, rti, rte);
-
-	/* Hooks can be disabled */
-	if (!pathman_hooks_enabled)
-		return;
 
 	/* Make sure that pg_pathman is ready */
 	if (!IsPathmanReady())
@@ -506,23 +498,23 @@ pathman_rel_pathlist_hook(PlannerInfo *root,
  * Intercept 'pg_pathman.enable' GUC assignments.
  */
 void
-pg_pathman_enable_assign_hook(bool newval, void *extra)
+pathman_enable_assign_hook(bool newval, void *extra)
 {
 	elog(DEBUG2, "pg_pathman_enable_assign_hook() [newval = %s] triggered",
 		  newval ? "true" : "false");
 
 	/* Return quickly if nothing has changed */
-	if (newval == (pg_pathman_init_state.pg_pathman_enable &&
-				   pg_pathman_init_state.auto_partition &&
-				   pg_pathman_init_state.override_copy &&
+	if (newval == (pathman_init_state.pg_pathman_enable &&
+				   pathman_init_state.auto_partition &&
+				   pathman_init_state.override_copy &&
 				   pg_pathman_enable_runtimeappend &&
 				   pg_pathman_enable_runtime_merge_append &&
 				   pg_pathman_enable_partition_filter &&
 				   pg_pathman_enable_bounds_cache))
 		return;
 
-	pg_pathman_init_state.auto_partition	= newval;
-	pg_pathman_init_state.override_copy		= newval;
+	pathman_init_state.auto_partition		= newval;
+	pathman_init_state.override_copy		= newval;
 	pg_pathman_enable_runtimeappend			= newval;
 	pg_pathman_enable_runtime_merge_append	= newval;
 	pg_pathman_enable_partition_filter		= newval;
@@ -552,17 +544,19 @@ pathman_planner_hook(Query *parse, int cursorOptions, ParamListInfo boundParams)
 
 	PlannedStmt	   *result;
 	uint32			query_id = parse->queryId;
-	bool			pathman_ready = IsPathmanReady(); /* in case it changes */
+
+	/* Save the result in case it changes */
+	bool			pathman_ready = IsPathmanReady();
 
 	PG_TRY();
 	{
-		if (pathman_ready && pathman_hooks_enabled)
+		if (pathman_ready)
 		{
 			/* Increment relation tags refcount */
 			incr_refcount_relation_tags();
 
 			/* Modify query tree if needed */
-			pathman_transform_query(parse);
+			pathman_transform_query(parse, boundParams);
 		}
 
 		/* Invoke original hook if needed */
@@ -571,7 +565,7 @@ pathman_planner_hook(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		else
 			result = standard_planner(parse, cursorOptions, boundParams);
 
-		if (pathman_ready && pathman_hooks_enabled)
+		if (pathman_ready)
 		{
 			/* Give rowmark-related attributes correct names */
 			ExecuteForPlanTree(result, postprocess_lock_rows);
@@ -682,7 +676,7 @@ pathman_post_parse_analysis_hook(ParseState *pstate, Query *query)
 		}
 
 		/* Modify query tree if needed */
-		pathman_transform_query(query);
+		pathman_transform_query(query, NULL);
 	}
 }
 
@@ -711,11 +705,11 @@ pathman_relcache_hook(Datum arg, Oid relid)
 	PartParentSearch	search;
 	Oid					partitioned_table;
 
-	if (!IsPathmanReady())
-		return;
-
 	/* Hooks can be disabled */
 	if (!pathman_hooks_enabled)
+		return;
+
+	if (!IsPathmanReady())
 		return;
 
 	/* We shouldn't even consider special OIDs */
@@ -752,7 +746,7 @@ pathman_relcache_hook(Datum arg, Oid relid)
 
 				/* Which means that 'relid' might be parent */
 				if (relid != InvalidOid)
-					delay_invalidation_parent_rel(relid);
+					delay_invalidation_vague_rel(relid);
 #ifdef NOT_USED
 				elog(DEBUG2, "Invalidation message for relation %u [%u]",
 					 relid, MyProcPid);

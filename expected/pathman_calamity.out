@@ -280,11 +280,11 @@ ERROR:  'parttype' should not be NULL
 SELECT validate_interval_value('pg_class', 'oid', 1, 'HASH', NULL);					/* not ok */
 ERROR:  interval should be NULL for HASH partitioned table
 SELECT validate_interval_value('pg_class', 'expr', 2, '1 mon', NULL);				/* not ok */
-ERROR:  partitioning expression analyze error
+ERROR:  failed to analyze partitioning expression "expr"
 SELECT validate_interval_value('pg_class', 'expr', 2, NULL, 'cooked_expr');			/* not ok */
 ERROR:  unrecognized token: "cooked_expr"
 SELECT validate_interval_value('pg_class', 'EXPR', 1, 'HASH', NULL);				/* not ok */
-ERROR:  partitioning expression analyze error
+ERROR:  failed to analyze partitioning expression "EXPR"
 /* check function validate_relname() */
 SELECT validate_relname('calamity.part_test');
  validate_relname 
@@ -296,6 +296,29 @@ SELECT validate_relname(1::REGCLASS);
 ERROR:  relation "1" does not exist
 SELECT validate_relname(NULL);
 ERROR:  relation should not be NULL
+/* check function validate_expression() */
+SELECT validate_expression(1::regclass, NULL);					/* not ok */
+ERROR:  relation "1" does not exist
+SELECT validate_expression(NULL::regclass, NULL);				/* not ok */
+ERROR:  'relid' should not be NULL
+SELECT validate_expression('calamity.part_test', NULL);			/* not ok */
+ERROR:  'expression' should not be NULL
+SELECT validate_expression('calamity.part_test', 'valval');		/* not ok */
+ERROR:  failed to analyze partitioning expression "valval"
+SELECT validate_expression('calamity.part_test', 'random()');	/* not ok */
+ERROR:  failed to analyze partitioning expression "random()"
+SELECT validate_expression('calamity.part_test', 'val');		/* OK */
+ validate_expression 
+---------------------
+ 
+(1 row)
+
+SELECT validate_expression('calamity.part_test', 'VaL');		/* OK */
+ validate_expression 
+---------------------
+ 
+(1 row)
+
 /* check function get_number_of_partitions() */
 SELECT get_number_of_partitions('calamity.part_test');
  get_number_of_partitions 
@@ -557,7 +580,7 @@ ERROR:  relation "0" does not exist
 SELECT add_to_pathman_config('calamity.part_test', NULL);		/* no expr */
 ERROR:  'expression' should not be NULL
 SELECT add_to_pathman_config('calamity.part_test', 'V_A_L');	/* wrong expr */
-ERROR:  partitioning expression analyze error
+ERROR:  failed to analyze partitioning expression "V_A_L"
 SELECT add_to_pathman_config('calamity.part_test', 'val');		/* OK */
  add_to_pathman_config 
 -----------------------
@@ -844,7 +867,7 @@ SELECT context, entries FROM pathman_cache_stats ORDER BY context;	/* OK */
  maintenance              |       0
  partition bounds cache   |       0
  partition dispatch cache |       1
- partition parents cache  |      10
+ partition parents cache  |       0
 (4 rows)
 
 SELECT drop_partitions('calamity.test_pathman_cache_stats');
@@ -887,9 +910,9 @@ SELECT context, entries FROM pathman_cache_stats ORDER BY context;	/* OK */
          context          | entries 
 --------------------------+---------
  maintenance              |       0
- partition bounds cache   |      10
+ partition bounds cache   |       0
  partition dispatch cache |       1
- partition parents cache  |      10
+ partition parents cache  |       0
 (4 rows)
 
 SELECT drop_partitions('calamity.test_pathman_cache_stats');

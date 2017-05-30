@@ -617,8 +617,8 @@ spawn_partitions_val(Oid parent_relid,				/* parent's Oid */
 
 	/* Execute comparison function cmp(value, cur_leading_bound) */
 	while (should_append ?
-				check_ge(&cmp_value_bound_finfo, value, cur_leading_bound) :
-				check_lt(&cmp_value_bound_finfo, value, cur_leading_bound))
+				check_ge(&cmp_value_bound_finfo, collid, value, cur_leading_bound) :
+				check_lt(&cmp_value_bound_finfo, collid, value, cur_leading_bound))
 	{
 		Bound bounds[2];
 
@@ -1334,12 +1334,12 @@ check_range_available(Oid parent_relid,
 			if (raise_error)
 				elog(ERROR, "specified range [%s, %s) overlaps "
 							"with existing partitions",
-					 !IsInfinite(start) ?
-						 datum_to_cstring(BoundGetValue(start), value_type) :
-						 "NULL",
-					 !IsInfinite(end) ?
-						 datum_to_cstring(BoundGetValue(end), value_type) :
-						 "NULL");
+					 IsInfinite(start) ?
+						 "NULL" :
+						 datum_to_cstring(BoundGetValue(start), value_type),
+					 IsInfinite(end) ?
+						 "NULL" :
+						 datum_to_cstring(BoundGetValue(end), value_type));
 
 			else return false;
 		}
