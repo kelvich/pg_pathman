@@ -1280,7 +1280,7 @@ handle_nulltest(const NullTest *expr,
 	{
 		if (prel->has_null_child)
 		{
-			uint32 idx = PrelNullPartition(prel);
+			uint32 idx = PrelNullChild(prel);
 
 			result->rangeset = (expr->nulltesttype == IS_NULL) ?
 						list_make1_irange(make_irange(idx, idx, IR_COMPLETE)) :

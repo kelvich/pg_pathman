@@ -244,7 +244,7 @@ PrelLastChild(const PartRelationInfo *prel)
 }
 
 static inline uint32
-PrelLastRangePartition(const PartRelationInfo *prel)
+PrelLastLiveChild(const PartRelationInfo *prel)
 {
 	Assert(PrelIsValid(prel));
 
@@ -256,7 +256,7 @@ PrelLastRangePartition(const PartRelationInfo *prel)
 }
 
 static inline uint32
-PrelNullPartition(const PartRelationInfo *prel)
+PrelNullChild(const PartRelationInfo *prel)
 {
 	Assert(PrelIsValid(prel));
 	Assert(prel->has_null_child);

@@ -479,7 +479,7 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 						RangeEntry *re;
 
 						if (prel->has_null_child &&
-							usercxt->child_number == PrelNullPartition(prel))
+							usercxt->child_number == PrelNullChild(prel))
 						{
 							Oid	 *children = PrelGetChildrenArray(prel),
 								  child_oid = children[usercxt->child_number];

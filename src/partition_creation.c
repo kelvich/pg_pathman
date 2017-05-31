@@ -451,7 +451,7 @@ create_partitions_for_value_internal(Oid relid, Datum value, Oid value_type,
 									  prel->ev_byval,
 									  prel->ev_len);
 
-				bound_max = CopyBound(&ranges[PrelLastRangePartition(prel)].max,
+				bound_max = CopyBound(&ranges[PrelLastLiveChild(prel)].max,
 									  prel->ev_byval,
 									  prel->ev_len);
 

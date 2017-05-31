@@ -429,7 +429,7 @@ select_partition_for_insert(Datum value,
 	{
 		if (prel->has_null_child)
 		{
-			partition_relid = PrelGetChildrenArray(prel)[PrelNullPartition(prel)];
+			partition_relid = PrelGetChildrenArray(prel)[PrelNullChild(prel)];
 		}
 		else
 		{

@@ -481,11 +481,6 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 		}
 		MemoryContextSwitchTo(old_mcxt);
 
-		/* Check partition's type (PT_NULL is ok) */
-		if (prel->parttype != pbin->parttype && pbin->parttype != PT_NULL)
-			elog(ERROR, "partition \"%s\" has wrong type",
-				 get_rel_name_or_relid(pbin->child_rel));
-
 		/* Copy bounds from bound cache */
 		switch (pbin->parttype)
 		{
@@ -503,6 +498,11 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 			case PT_RANGE:
 				{
 					Assert(i < PrelLiveChildrenCount(prel));
+
+					/* Suppress clang analyzer */
+					if (prel->ranges == NULL)
+						elog(ERROR, "error in function "
+							 CppAsString(fill_prel_with_partitions));
 
 					/* Copy child's Oid */
 					prel->ranges[i].child_oid = pbin->child_rel;
