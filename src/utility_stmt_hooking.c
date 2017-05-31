@@ -648,10 +648,8 @@ PathmanCopyFrom(CopyState cstate, Relation parent_rel,
 			elog(ERROR, ERR_PART_ATTR_MULTIPLE_RESULTS);
 
 		/* Search for a matching partition */
-		rri_holder = select_partition_for_insert(value,
-												 prel->ev_type, prel,
-												 &parts_storage, estate,
-												 isnull);
+		rri_holder = select_partition_for_insert(value,prel->ev_type, isnull,
+												 prel, &parts_storage, estate);
 		child_result_rel = rri_holder->result_rel_info;
 		estate->es_result_relation_info = child_result_rel;
 

@@ -457,16 +457,16 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 			}
 
 			/* Fill in common values */
-			values[Anum_pathman_pl_parent - 1]		= PrelParentRelid(prel);
-			values[Anum_pathman_pl_parttype - 1]	= prel->parttype;
-			values[Anum_pathman_pl_partattr - 1]	= CStringGetTextDatum(prel->expr_cstr);
+			values[Anum_pathman_pl_parent - 1]   = PrelParentRelid(prel);
+			values[Anum_pathman_pl_parttype - 1] = prel->parttype;
+			values[Anum_pathman_pl_partattr - 1] = CStringGetTextDatum(prel->expr_cstr);
 
 			switch (prel->parttype)
 			{
 				case PT_HASH:
 					{
-						Oid	 *children = PrelGetChildrenArray(prel),
-							  child_oid = children[usercxt->child_number];
+						Oid	   *children = PrelGetChildrenArray(prel),
+								child_oid = children[usercxt->child_number];
 
 						values[Anum_pathman_pl_partition - 1] = child_oid;
 						isnull[Anum_pathman_pl_range_min - 1] = true;
@@ -478,8 +478,8 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 					{
 						RangeEntry *re;
 
-						if (prel->has_null_partition
-								&& usercxt->child_number == PrelNullPartition(prel))
+						if (prel->has_null_child &&
+							usercxt->child_number == PrelNullPartition(prel))
 						{
 							Oid	 *children = PrelGetChildrenArray(prel),
 								  child_oid = children[usercxt->child_number];
@@ -498,8 +498,8 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 							if (!IsInfinite(&re->min))
 							{
 								Datum rmin = CStringGetTextDatum(
-												datum_to_cstring(BoundGetValue(&re->min),
-																 prel->ev_type));
+											datum_to_cstring(BoundGetValue(&re->min),
+															 prel->ev_type));
 
 								values[Anum_pathman_pl_range_min - 1] = rmin;
 								isnull[Anum_pathman_pl_range_min - 1] = false;
@@ -510,8 +510,8 @@ show_partition_list_internal(PG_FUNCTION_ARGS)
 							if (!IsInfinite(&re->max))
 							{
 								Datum rmax = CStringGetTextDatum(
-												datum_to_cstring(BoundGetValue(&re->max),
-																 prel->ev_type));
+											datum_to_cstring(BoundGetValue(&re->max),
+															 prel->ev_type));
 
 								values[Anum_pathman_pl_range_max - 1] = rmax;
 								isnull[Anum_pathman_pl_range_max - 1] = false;

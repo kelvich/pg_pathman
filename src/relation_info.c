@@ -435,6 +435,14 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 						  const Oid *partitions,
 						  const uint32 parts_count)
 {
+/* Allocate array if partitioning type matches 'prel' (or "ANY") */
+#define AllocZeroArray(part_type, elem_num, elem_type) \
+	( \
+		((part_type) == PT_ANY || (part_type) == prel->parttype) ? \
+			MemoryContextAllocZero((cache_mcxt), (elem_num) * sizeof(elem_type)) : \
+			NULL \
+	)
+
 	uint32			i;
 	MemoryContext	cache_mcxt = PathmanRelationCacheContext,
 					temp_mcxt,	/* reference temporary mcxt */
@@ -442,18 +450,15 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 
 	AssertTemporaryContext();
 
-	/* Allocate memory for 'prel->children' & 'prel->ranges' (if needed) */
-	prel->children	= MemoryContextAllocZero(cache_mcxt, parts_count * sizeof(Oid));
-	prel->ranges	= NULL;
-	prel->has_null_partition = false;
-
 	/* Set number of children */
 	PrelChildrenCount(prel) = parts_count;
 
-	/* Now we can use PrelRangePartitionsCount macros */
-	if (prel->parttype == PT_RANGE)
-		prel->ranges = MemoryContextAllocZero(cache_mcxt,
-						PrelRangePartitionsCount(prel) * sizeof(RangeEntry));
+	/* We don't create NULL partitions by default */
+	prel->has_null_child = false;
+
+	/* Allocate memory for 'prel->children' & 'prel->ranges' (if needed) */
+	prel->children	= AllocZeroArray(PT_ANY,   PrelChildrenCount(prel), Oid);
+	prel->ranges	= AllocZeroArray(PT_RANGE, PrelLiveChildrenCount(prel), RangeEntry);
 
 	/* Create temporary memory context for loop */
 	temp_mcxt = AllocSetContextCreate(CurrentMemoryContext,
@@ -463,7 +468,7 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 	/* Initialize bounds of partitions */
 	for (i = 0; i < PrelChildrenCount(prel); i++)
 	{
-		PartBoundInfo *bound_info;
+		PartBoundInfo *pbin;
 
 		/* Clear all previous allocations */
 		MemoryContextReset(temp_mcxt);
@@ -472,40 +477,44 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 		old_mcxt = MemoryContextSwitchTo(temp_mcxt);
 		{
 			/* Fetch constraint's expression tree */
-			bound_info = get_bounds_of_partition(partitions[i], prel);
+			pbin = get_bounds_of_partition(partitions[i], prel);
 		}
 		MemoryContextSwitchTo(old_mcxt);
 
+		/* Check partition's type (PT_NULL is ok) */
+		if (prel->parttype != pbin->parttype && pbin->parttype != PT_NULL)
+			elog(ERROR, "partition \"%s\" has wrong type",
+				 get_rel_name_or_relid(pbin->child_rel));
+
 		/* Copy bounds from bound cache */
-		switch (bound_info->parttype)
+		switch (pbin->parttype)
 		{
 			case PT_NULL:
 				/* last item in children will contain NULL partition */
-				prel->children[parts_count - 1] = bound_info->child_rel;
-				prel->has_null_partition = true;
+				prel->children[parts_count - 1] = pbin->child_rel;
+				prel->has_null_child = true;
 				break;
+
 			case PT_HASH:
-				Assert(bound_info->part_idx < PrelHashPartitionsCount(prel));
-				prel->children[bound_info->part_idx] = bound_info->child_rel;
+				Assert(i < PrelLiveChildrenCount(prel));
+				prel->children[pbin->part_idx] = pbin->child_rel;
 				break;
 
 			case PT_RANGE:
 				{
-					Assert(i < PrelRangePartitionsCount(prel));
-					if (prel->parttype != PT_RANGE)
-						elog(ERROR, "inconsistency with bound parttype and partition parttype");
+					Assert(i < PrelLiveChildrenCount(prel));
 
 					/* Copy child's Oid */
-					prel->ranges[i].child_oid = bound_info->child_rel;
+					prel->ranges[i].child_oid = pbin->child_rel;
 
 					/* Copy all min & max Datums to the persistent mcxt */
 					old_mcxt = MemoryContextSwitchTo(cache_mcxt);
 					{
-						prel->ranges[i].min = CopyBound(&bound_info->range_min,
+						prel->ranges[i].min = CopyBound(&pbin->range_min,
 														prel->ev_byval,
 														prel->ev_len);
 
-						prel->ranges[i].max = CopyBound(&bound_info->range_max,
+						prel->ranges[i].max = CopyBound(&pbin->range_max,
 														prel->ev_byval,
 														prel->ev_len);
 					}
@@ -535,12 +544,12 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 		cmp_info.collid = prel->ev_collid;
 
 		/* Sort partitions by RangeEntry->min asc */
-		qsort_arg((void *) prel->ranges, PrelRangePartitionsCount(prel),
+		qsort_arg((void *) prel->ranges, PrelLiveChildrenCount(prel),
 				  sizeof(RangeEntry), cmp_range_entries,
 				  (void *) &cmp_info);
 
 		/* Initialize 'prel->children' array */
-		for (i = 0; i < PrelRangePartitionsCount(prel); i++)
+		for (i = 0; i < PrelLiveChildrenCount(prel); i++)
 			prel->children[i] = prel->ranges[i].child_oid;
 	}
 
@@ -558,6 +567,8 @@ fill_prel_with_partitions(PartRelationInfo *prel,
 			}
 		}
 #endif
+
+#undef AllocZeroArray
 }
 
 /* qsort comparison function for RangeEntries */

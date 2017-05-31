@@ -75,12 +75,9 @@ static void handle_opexpr(const OpExpr *expr,
 						  const WalkerContext *context,
 						  WrapperNode *result);
 
-static void handle_nulltest(const NullTest *nulltest,
+static void handle_nulltest(const NullTest *expr,
 							const WalkerContext *context,
 							WrapperNode *result);
-
-static void handle_null(const PartRelationInfo *prel, WrapperNode *result,
-						NullTestType testtype);
 
 static bool is_key_op_param(const OpExpr *expr,
 							const WalkerContext *context,
@@ -652,7 +649,7 @@ walk_expr_tree(Expr *expr, const WalkerContext *context)
 			handle_arrexpr((ScalarArrayOpExpr *) expr, context, result);
 			return result;
 
-		/* IS (NOT) NULL */
+		/* IS [NOT] NULL */
 		case T_NullTest:
 			handle_nulltest((NullTest *) expr, context, result);
 			return result;
@@ -820,7 +817,7 @@ handle_const(const Const *c,
 				/* Calculate 32-bit hash of 'value' and corresponding index */
 				hash = OidFunctionCall1(prel->hash_proc, value);
 				idx = hash_to_part_index(DatumGetInt32(hash),
-										 PrelHashPartitionsCount(prel));
+										 PrelLiveChildrenCount(prel));
 
 				result->rangeset = list_make1_irange(make_irange(idx, idx, IR_LOSSY));
 				result->paramsel = 1.0;
@@ -846,7 +843,7 @@ handle_const(const Const *c,
 										collid,
 										&cmp_finfo,
 										PrelGetRangesArray(context->prel),
-										PrelRangePartitionsCount(context->prel),
+										PrelLiveChildrenCount(context->prel),
 										strategy,
 										result); /* result->rangeset = ... */
 				result->paramsel = 1.0;
@@ -1269,52 +1266,36 @@ handle_opexpr(const OpExpr *expr,
 	result->paramsel = 1.0;
 }
 
-static void
-handle_null(const PartRelationInfo *prel, WrapperNode *result,
-			NullTestType testtype)
-{
-	if (prel->has_null_partition)
-	{
-		uint32	idx			= PrelNullPartition(prel);
-		float	paramsel	= estimate_paramsel_using_prel(prel,
-													BTEqualStrategyNumber);
-
-		if (testtype == IS_NULL)
-		{
-			result->rangeset = list_make1_irange(make_irange(idx, idx, IR_COMPLETE));
-			result->paramsel = paramsel;
-		}
-		else
-		{
-			result->rangeset = list_make1_irange(make_irange(0, idx - 1, IR_COMPLETE));
-			result->paramsel = 1.0 - paramsel;	/* opposite */
-		}
-
-		return;
-	}
-
-	if (testtype == IS_NULL)
-	{
-		result->rangeset = NIL;
-		result->paramsel = 0.0;
-	}
-}
-
 /* Operator expression handler */
 static void
-handle_nulltest(const NullTest *nulltest,
+handle_nulltest(const NullTest *expr,
 				const WalkerContext *context,
 				WrapperNode *result)
 {
 	const PartRelationInfo *prel = context->prel;
 
-	result->orig = (const Node *) nulltest;
+	result->orig = (const Node *) expr;
 
-	if (match_expr_to_operand((Node *) nulltest->arg, context->prel_expr))
-		handle_null(prel, result, nulltest->nulltesttype);
+	if (match_expr_to_operand((Node *) expr->arg, context->prel_expr))
+	{
+		if (prel->has_null_child)
+		{
+			uint32 idx = PrelNullPartition(prel);
+
+			result->rangeset = (expr->nulltesttype == IS_NULL) ?
+						list_make1_irange(make_irange(idx, idx, IR_COMPLETE)) :
+						list_make1_irange(make_irange(0, idx - 1, IR_COMPLETE));
+			result->paramsel = 1.0;
+		}
+		else if (expr->nulltesttype == IS_NULL)
+		{
+			result->rangeset = NIL;
+			result->paramsel = 0.0;
+		}
+	}
 	else
 	{
-		result->rangeset = list_make1_irange_full(prel, IR_COMPLETE);
+		result->rangeset = list_make1_irange_full(prel, IR_LOSSY);
 		result->paramsel = 1.0; /* can't give any estimates */
 	}
 }

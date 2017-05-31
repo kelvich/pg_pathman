@@ -144,9 +144,9 @@ typedef struct
 
 	/* Partition dispatch info */
 	uint32			children_count;
-	Oid			   *children;					/* Oids of child partitions */
-	RangeEntry	   *ranges;						/* per-partition range entry or NULL */
-	bool			has_null_partition;		/* is nulls partition was created? */
+	Oid			   *children;		/* Oids of child partitions */
+	RangeEntry	   *ranges;			/* per-partition range entry or NULL */
+	bool			has_null_child;	/* do we have a NULL partition? */
 
 	/* Partitioning expression */
 	const char	   *expr_cstr;		/* original expression */
@@ -226,11 +226,8 @@ typedef enum
 
 #define PrelChildrenCount(prel)		( (prel)->children_count )
 
-#define PrelHashPartitionsCount(prel) \
-	( PrelChildrenCount(prel) - ((prel)->has_null_partition? 1 : 0))
-
-#define PrelRangePartitionsCount(prel) \
-	( PrelChildrenCount(prel) - ((prel)->has_null_partition? 1 : 0))
+#define PrelLiveChildrenCount(prel) \
+	( PrelChildrenCount(prel) - ((prel)->has_null_child ? 1 : 0))
 
 #define PrelIsValid(prel)			( (prel) && (prel)->valid )
 
@@ -255,14 +252,14 @@ PrelLastRangePartition(const PartRelationInfo *prel)
 		elog(ERROR, "pg_pathman's cache entry for relation %u has 0 children",
 			 PrelParentRelid(prel));
 
-	return PrelRangePartitionsCount(prel) - 1;
+	return PrelLiveChildrenCount(prel) - 1;
 }
 
 static inline uint32
 PrelNullPartition(const PartRelationInfo *prel)
 {
 	Assert(PrelIsValid(prel));
-	Assert(prel->has_null_partition);
+	Assert(prel->has_null_child);
 
 	return PrelLastChild(prel); /* last partition */
 }

@@ -1170,7 +1170,7 @@ validate_hash_constraint(const Expr *expr,
 			return false;
 
 		/* Check that PARTITIONS_COUNT is equal to total amount of partitions */
-		if (DatumGetUInt32(((Const *) second)->constvalue) != PrelHashPartitionsCount(prel))
+		if (DatumGetUInt32(((Const *) second)->constvalue) != PrelLiveChildrenCount(prel))
 			return false;
 
 		/* Check that CUR_PARTITION_HASH is Const */
@@ -1185,7 +1185,7 @@ validate_hash_constraint(const Expr *expr,
 			return false;
 
 		*part_idx = DatumGetUInt32(cur_partition_idx->constvalue);
-		if (*part_idx >= PrelHashPartitionsCount(prel))
+		if (*part_idx >= PrelLiveChildrenCount(prel))
 			return false;
 
 		return true; /* everything seems to be ok */

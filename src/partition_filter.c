@@ -413,31 +413,35 @@ find_partitions_for_value(Datum value, Oid value_type,
  * Smart wrapper for scan_result_parts_storage().
  */
 ResultRelInfoHolder *
-select_partition_for_insert(Datum value, Oid value_type,
+select_partition_for_insert(Datum value,
+							Oid value_type,
+							bool value_isnull,
 							const PartRelationInfo *prel,
 							ResultPartsStorage *parts_storage,
-							EState *estate,
-							bool is_null)
+							EState *estate)
 {
 	MemoryContext			old_mcxt;
 	ResultRelInfoHolder	   *rri_holder;
 	Oid						partition_relid = InvalidOid;
 	bool					invalidate_prel = false;
 
-	if (is_null)
+	if (value_isnull)
 	{
-		if (prel->has_null_partition)
+		if (prel->has_null_child)
+		{
 			partition_relid = PrelGetChildrenArray(prel)[PrelNullPartition(prel)];
+		}
 		else
 		{
-			partition_relid = create_single_null_partition(PrelParentRelid(prel), NULL);
+			partition_relid = create_single_null_partition(PrelParentRelid(prel),
+														   NULL);
 			invalidate_prel = true;
 		}
 	}
 	else
 	{
-		int		 nparts;
-		Oid		*parts;
+		int		nparts;
+		Oid	   *parts;
 
 		/* Search for matching partitions */
 		parts = find_partitions_for_value(value, value_type, prel, &nparts);
@@ -447,7 +451,7 @@ select_partition_for_insert(Datum value, Oid value_type,
 		else if (nparts == 0)
 		{
 			partition_relid = create_partitions_for_value(PrelParentRelid(prel),
-														   value, prel->ev_type);
+														  value, prel->ev_type);
 			invalidate_prel = true;
 		}
 		else partition_relid = parts[0];
@@ -648,9 +652,8 @@ partition_filter_exec(CustomScanState *node)
 			elog(ERROR, ERR_PART_ATTR_MULTIPLE_RESULTS);
 
 		/* Search for a matching partition */
-		rri_holder = select_partition_for_insert(value, prel->ev_type, prel,
-												 &state->result_parts, estate,
-												 isnull);
+		rri_holder = select_partition_for_insert(value, prel->ev_type, isnull,
+												 prel, &state->result_parts, estate);
 
 		/* Switch back and clean up per-tuple context */
 		MemoryContextSwitchTo(old_mcxt);
