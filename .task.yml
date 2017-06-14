@@ -1,0 +1,34 @@
+platform: linux
+image_resource:
+  type: docker-image
+  source:
+    repository: ubuntu
+    tag: trusty
+inputs:
+  - name: pg_pathman
+params:
+  - PG_VER: '10'
+  - CHECK_CODE: 'false'
+  - LLVM_VER: '4.0'
+  - CC: 'gcc'
+run:
+  path: sh
+  args:
+  - -exc
+  - |
+    sed -ri 's/\/\/\w+\.ubuntu\.com/\/\/mirror\.yandex\.ru/' /etc/apt/sources.list
+    apt-get update -qq
+    apt-get -y install -qq wget ca-certificates build-essential libssl-dev libkrb5-dev
+
+    cd pg_pathman
+
+    sh ./travis/dep-ubuntu-postgres.sh
+    sh ./travis/dep-ubuntu-postgres.sh
+
+    useradd pgtest
+    echo 'pgtest ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+    # https://github.com/concourse/concourse/issues/802
+    chmod a+s /usr/bin/sudo
+    chown -R pgtest:pgtest ./
+
+    sudo -E -u pgtest bash ./travis/pg-travis-test.sh

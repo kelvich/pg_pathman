@@ -6,7 +6,7 @@ sudo apt-get update
 
 
 # required packages
-apt_packages="postgresql-$PG_VER postgresql-server-dev-$PG_VER postgresql-common python-pip python-dev build-essential"
+apt_packages="postgresql-$PG_VER postgresql-server-dev-$PG_VER postgresql-common python-pip python-dev build-essential python-virtualenv"
 pip_packages="testgres"
 
 # exit code
@@ -19,13 +19,13 @@ config_path=/usr/lib/postgresql/$PG_VER/bin/pg_config
 
 
 # bug: http://www.postgresql.org/message-id/20130508192711.GA9243@msgid.df7cb.de
-sudo update-alternatives --remove-all postmaster.1.gz
+# sudo update-alternatives --remove-all postmaster.1.gz
 
 # stop all existing instances (because of https://github.com/travis-ci/travis-cookbooks/pull/221)
-sudo service postgresql stop
+# sudo service postgresql stop
 # ... and make sure they don't come back
-echo 'exit 0' | sudo tee /etc/init.d/postgresql
-sudo chmod a+x /etc/init.d/postgresql
+# echo 'exit 0' | sudo tee /etc/init.d/postgresql
+# sudo chmod a+x /etc/init.d/postgresql
 
 # install required packages
 sudo apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -y install -qq $apt_packages
@@ -97,7 +97,7 @@ virtualenv /tmp/envs/pg_pathman
 source /tmp/envs/pg_pathman/bin/activate
 
 # install pip packages
-pip3 install $pip_packages
+pip install $pip_packages
 
 # run python tests
 make USE_PGXS=1 PG_CONFIG=$config_path python_tests || status=$?
