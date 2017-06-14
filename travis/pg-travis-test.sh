@@ -6,7 +6,7 @@ sudo apt-get update
 
 
 # required packages
-apt_packages="postgresql-$PG_VER postgresql-server-dev-$PG_VER postgresql-common python-pip python-dev build-essential python-virtualenv"
+apt_packages="postgresql-$PG_VER postgresql-server-dev-$PG_VER postgresql-common python3-pip python3-dev build-essential"
 pip_packages="testgres"
 
 # exit code
@@ -30,6 +30,7 @@ config_path=/usr/lib/postgresql/$PG_VER/bin/pg_config
 # install required packages
 sudo apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -y install -qq $apt_packages
 
+sudo pip3 install virtualenv
 
 # perform code analysis if necessary
 if [ $CHECK_CODE = "true" ]; then
@@ -93,17 +94,17 @@ if test -f regression.diffs; then cat regression.diffs; fi
 set +u
 
 # create virtual environment and activate it
-virtualenv /tmp/envs/pg_pathman
-source /tmp/envs/pg_pathman/bin/activate
+#virtualenv /tmp/envs/pg_pathman
+#source /tmp/envs/pg_pathman/bin/activate
 
 # install pip packages
-pip install $pip_packages
+sudo pip3 install $pip_packages
 
 # run python tests
 make USE_PGXS=1 PG_CONFIG=$config_path python_tests || status=$?
 
 # deactivate virtual environment
-deactivate
+#deactivate
 
 set -u
 
